@@ -1,5 +1,8 @@
 # Herdr Mermaid Preview
 
+[![CI](https://github.com/Volpestyle/herdr-plugin-mermaid-preview/actions/workflows/ci.yml/badge.svg)](https://github.com/Volpestyle/herdr-plugin-mermaid-preview/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Herdr Mermaid Preview watches the native Claude Code or Codex session behind a
 selected Herdr pane. When an assistant message contains a complete
 `mermaid`-fenced block, the plugin renders it locally and displays it in a live
@@ -18,18 +21,33 @@ and `q` to close the preview.
 - Ghostty or another Kitty-graphics-compatible outer terminal
 - Node.js 22.12 or newer
 
+## Install
+
+Install the plugin directly from GitHub:
+
+```bash
+herdr plugin install Volpestyle/herdr-plugin-mermaid-preview
+```
+
+Install Herdr's session-identity integration for each agent you use:
+
+```bash
+herdr integration install claude
+herdr integration install codex
+```
+
+Enable Kitty graphics in `~/.config/herdr/config.toml`:
+
+```toml
+[experimental]
+kitty_graphics = true
+```
+
 After enabling Kitty graphics for the first time, detach and reattach the Herdr
 client once so it renegotiates graphics frame support. The Herdr server, panes,
 and agents remain running.
 
-## Install locally
-
-```bash
-npm ci
-herdr plugin link "$PWD"
-```
-
-Open a preview for the focused agent pane:
+Open a preview for the focused Claude Code or Codex pane:
 
 ```bash
 herdr plugin action invoke dev.volpestyle.mermaid-preview.open
@@ -48,6 +66,14 @@ key = "prefix+m"
 type = "plugin_action"
 command = "dev.volpestyle.mermaid-preview.open"
 description = "open Mermaid preview"
+```
+
+## Develop locally
+
+```bash
+npm ci
+herdr plugin link "$PWD"
+npm run check
 ```
 
 ## How it works
@@ -75,8 +101,10 @@ resource syntax fail closed with a visible preview error.
 See [docs/architecture.md](docs/architecture.md) for the screen-scraping decision
 and runtime boundaries.
 
-## Development
+## Troubleshooting
 
-```bash
-npm run check
-```
+- **The tab opens but stays empty:** after first enabling Kitty graphics, detach
+  and reattach the Herdr client so it renegotiates graphics frame support.
+- **The tab waits for session identity:** install the matching Herdr integration
+  with `herdr integration install claude` or `herdr integration install codex`,
+  then start a new agent session.

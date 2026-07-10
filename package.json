@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Live Mermaid previews for Claude Code and Codex panes in Herdr",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Volpestyle/herdr-plugin-mermaid-preview.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Volpestyle/herdr-plugin-mermaid-preview/issues"
+  },
+  "homepage": "https://github.com/Volpestyle/herdr-plugin-mermaid-preview#readme",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -15,5 +24,8 @@
   "dependencies": {
     "@mermaid-js/mermaid-cli": "11.16.0",
     "puppeteer": "25.3.0"
+  },
+  "allowScripts": {
+    "puppeteer@25.3.0": true
   }
 }
