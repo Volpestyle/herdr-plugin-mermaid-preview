@@ -67,7 +67,12 @@ test("Chromium network guard aborts requests that bypass source preflight", asyn
 
   const address = server.address();
   assert.equal(typeof address, "object");
-  const browser = await puppeteer.launch({ headless: true });
+  const browser = await puppeteer.launch({
+    headless: true,
+    // GitHub-hosted Ubuntu runners disable Chromium's user-namespace sandbox.
+    // This applies only to the test browser; production rendering stays sandboxed.
+    ...(process.env.CI === "true" ? { args: ["--no-sandbox"] } : {}),
+  });
   context.after(() => browser.close());
   installNetworkGuard(browser);
   const page = await browser.newPage();
