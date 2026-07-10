@@ -11,6 +11,7 @@ import {
   zoomedImagePlacement,
 } from "./kitty.mjs";
 import { renderMermaid } from "./renderer.mjs";
+import { sessionIdentity } from "./session.mjs";
 import { JsonlFollower, resolveTranscript, transcriptLabel } from "./transcripts.mjs";
 
 const sourcePaneId = process.env.MERMAID_SOURCE_PANE_ID;
@@ -167,8 +168,7 @@ function addRecord(record) {
 }
 
 async function adoptSession(info) {
-  const agent = info.agent;
-  const sessionId = info.agent_session_id || info.agent_session?.value;
+  const { agent, sessionId, sessionPath } = sessionIdentity(info);
   if (!agent || !sessionId) {
     throw new Error("Herdr has not received this pane's native agent session identity yet");
   }
@@ -181,7 +181,7 @@ async function adoptSession(info) {
   const transcript = await resolveTranscript({
     agent,
     sessionId,
-    sessionPath: info.agent_session_path,
+    sessionPath,
   });
   if (!transcript) throw new Error(`Waiting for the ${agent} session transcript to appear`);
 
