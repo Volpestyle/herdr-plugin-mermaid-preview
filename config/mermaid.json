@@ -1,0 +1,10 @@
+{
+  "securityLevel": "strict",
+  "theme": "dark",
+  "htmlLabels": false,
+  "flowchart": {
+    "htmlLabels": false,
+    "useMaxWidth": true
+  },
+  "maxTextSize": 100000
+}
