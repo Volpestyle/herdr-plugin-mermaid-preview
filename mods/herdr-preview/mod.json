@@ -1,0 +1,9 @@
+{
+  "place": "none",
+  "title": "Herdr Preview",
+  "overlay": {
+    "kind": "dialog",
+    "width": 480,
+    "height": 410
+  }
+}

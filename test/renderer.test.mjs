@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import puppeteer from "puppeteer";
 import test from "node:test";
-import { installNetworkGuard, renderMermaid } from "../src/renderer.mjs";
+import { installNetworkGuard, renderMermaid } from "../src/render/mermaid.mjs";
 
 test("rejects oversized Mermaid before creating renderer inputs", async () => {
   await assert.rejects(

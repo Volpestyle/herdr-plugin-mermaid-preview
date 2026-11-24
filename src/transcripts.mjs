@@ -75,6 +75,110 @@ export async function resolveTranscript({ agent, sessionId, sessionPath = null }
   throw new Error(`Unsupported agent: ${agent}`);
 }
 
+/**
+ * A base64 image content block, or null when it carries no usable bytes.
+ *
+ * Both harnesses elide image payloads once a transcript is compacted, leaving
+ * the block in place with an empty source. Those are placeholders for an image
+ * that is no longer recoverable, not images — roughly half of the blocks in a
+ * long-lived project directory — so they never become preview items.
+ */
+function imagePayload(content) {
+  if (content?.type === "image") {
+    const source = content.source;
+    if (source?.type !== "base64" || typeof source.data !== "string" || !source.data) return null;
+    return { data: source.data, mediaType: source.media_type || null };
+  }
+
+  // Codex/OpenAI shape: a data URL rather than a discrete field.
+  if (content?.type === "input_image" && typeof content.image_url === "string") {
+    const match = content.image_url.match(/^data:([^;,]+);base64,(.+)$/su);
+    if (!match) return null;
+    return { data: match[2], mediaType: match[1] };
+  }
+
+  return null;
+}
+
+function claudeRecords(value) {
+  const message = value.message;
+  const base = value.uuid || message?.id || "claude-message";
+
+  if (value.type === "assistant" && message?.role === "assistant") {
+    return (message.content || [])
+      .map((content, index) => ({ content, index }))
+      .filter(({ content }) => content?.type === "text" && typeof content.text === "string")
+      .map(({ content, index }) => ({ id: `${base}:${index}`, kind: "text", text: content.text }));
+  }
+
+  // Images reach the transcript as user-role content, which covers both what
+  // you paste in and what the agent looked at with its read tool. The second
+  // kind arrives one level down, inside the tool_result block that carries it —
+  // reading only the top level finds the images you pasted and silently misses
+  // every screenshot the agent took.
+  if (value.type === "user" || value.type === "attachment") {
+    const content = message?.content;
+    if (!Array.isArray(content)) return [];
+
+    const records = [];
+    content.forEach((entry, index) => {
+      const direct = imagePayload(entry);
+      if (direct) {
+        records.push({ id: `${base}:${index}`, kind: "image", ...direct });
+        return;
+      }
+      if (entry?.type === "tool_result" && Array.isArray(entry.content)) {
+        entry.content.forEach((nested, nestedIndex) => {
+          const payload = imagePayload(nested);
+          if (payload) {
+            records.push({ id: `${base}:${index}.${nestedIndex}`, kind: "image", ...payload });
+          }
+        });
+      }
+    });
+    return records;
+  }
+
+  return [];
+}
+
+function codexRecords(value) {
+  if (value.type !== "response_item") return [];
+  const payload = value.payload;
+  if (!payload) return [];
+
+  if (payload.type === "message") {
+    const base = payload.id || "codex-message";
+
+    if (payload.role === "assistant") {
+      return (payload.content || [])
+        .map((content, index) => ({ content, index }))
+        .filter(({ content }) => content?.type === "output_text" && typeof content.text === "string")
+        .map(({ content, index }) => ({ id: `${base}:${index}`, kind: "text", text: content.text }));
+    }
+
+    if (payload.role === "user") {
+      return (payload.content || [])
+        .map((entry, index) => ({ index, payload: imagePayload(entry) }))
+        .filter(({ payload: found }) => found !== null)
+        .map(({ index, payload: found }) => ({ id: `${base}:${index}`, kind: "image", ...found }));
+    }
+  }
+
+  if (
+    (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") &&
+    Array.isArray(payload.output)
+  ) {
+    const base = payload.call_id || payload.id || "codex-tool-output";
+    return payload.output
+      .map((entry, index) => ({ index, payload: imagePayload(entry) }))
+      .filter(({ payload: found }) => found !== null)
+      .map(({ index, payload: found }) => ({ id: `${base}:${index}`, kind: "image", ...found }));
+  }
+
+  return [];
+}
+
 export function recordsFromJsonLine(line, agent) {
   let value;
   try {
@@ -83,31 +187,8 @@ export function recordsFromJsonLine(line, agent) {
     return [];
   }
 
-  if (
-    agent === "codex" &&
-    value.type === "response_item" &&
-    value.payload?.type === "message" &&
-    value.payload?.role === "assistant"
-  ) {
-    return (value.payload.content || [])
-      .map((content, index) => ({ content, index }))
-      .filter(({ content }) => content?.type === "output_text" && typeof content.text === "string")
-      .map(({ content, index }) => ({
-        id: `${value.payload.id || "codex-message"}:${index}`,
-        text: content.text,
-      }));
-  }
-
-  if (agent === "claude" && value.type === "assistant" && value.message?.role === "assistant") {
-    return (value.message.content || [])
-      .map((content, index) => ({ content, index }))
-      .filter(({ content }) => content?.type === "text" && typeof content.text === "string")
-      .map(({ content, index }) => ({
-        id: `${value.uuid || value.message.id || "claude-message"}:${index}`,
-        text: content.text,
-      }));
-  }
-
+  if (agent === "codex") return codexRecords(value);
+  if (agent === "claude") return claudeRecords(value);
   return [];
 }
 

@@ -21,7 +21,7 @@ test("reads assistant Markdown from a Codex response item", () => {
   });
 
   assert.deepEqual(recordsFromJsonLine(line, "codex"), [
-    { id: "msg_1:0", text: "```mermaid\nflowchart LR\nA-->B\n```" },
+    { id: "msg_1:0", kind: "text", text: "```mermaid\nflowchart LR\nA-->B\n```" },
   ]);
 });
 
@@ -36,7 +36,7 @@ test("reads assistant Markdown from a Claude transcript entry", () => {
   });
 
   assert.deepEqual(recordsFromJsonLine(line, "claude"), [
-    { id: "uuid-1:0", text: "```mermaid\nsequenceDiagram\nA->>B: Hi\n```" },
+    { id: "uuid-1:0", kind: "text", text: "```mermaid\nsequenceDiagram\nA->>B: Hi\n```" },
   ]);
 });
 
@@ -80,6 +80,7 @@ test("follows assistant records appended to a JSONL transcript", async (context)
 
   assert.deepEqual(await recordPromise, {
     id: "msg_live:0",
+    kind: "text",
     text: "```mermaid\nflowchart TD\nA-->B\n```",
   });
 });

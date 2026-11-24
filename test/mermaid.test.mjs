@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { diagramType, extractMermaidBlocks } from "../src/mermaid.mjs";
+import { diagramType, extractMermaidBlocks } from "../src/sources/mermaid.mjs";
 
 test("extracts complete Mermaid fences and ignores other code", () => {
   const markdown = [

@@ -1,8 +1,8 @@
 id = "dev.volpestyle.mermaid-preview"
-name = "Mermaid Preview"
-version = "0.1.0"
+name = "Herdr Preview"
+version = "0.3.0"
 min_herdr_version = "0.7.1"
-description = "Render Mermaid blocks from Claude Code and Codex in a live Herdr preview pane"
+description = "Render Mermaid diagrams and transcript images from Claude Code and Codex in a live Herdr preview pane"
 platforms = ["macos", "linux"]
 
 [[build]]
@@ -12,10 +12,16 @@ command = ["npm", "ci"]
 id = "open"
 title = "Open Mermaid preview"
 contexts = ["pane"]
-command = ["node", "src/open-preview.mjs"]
+command = ["node", "src/open-preview.mjs", "mermaid"]
+
+[[actions]]
+id = "open-images"
+title = "Open image preview"
+contexts = ["pane"]
+command = ["node", "src/open-preview.mjs", "images"]
 
 [[panes]]
 id = "preview"
-title = "Mermaid preview"
+title = "Preview"
 placement = "tab"
 command = ["node", "src/preview.mjs"]

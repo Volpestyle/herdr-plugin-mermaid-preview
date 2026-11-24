@@ -2,47 +2,87 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractMermaidBlocks } from "./mermaid.mjs";
-import { paneInfo } from "./herdr.mjs";
 import {
   deleteAllKittyImages,
   encodeKittyPng,
   pngDimensions,
   zoomedImagePlacement,
 } from "./kitty.mjs";
-import { renderMermaid } from "./renderer.mjs";
-import { sessionIdentity } from "./session.mjs";
+import {
+  cellAspectRatio,
+  defaultStateDirectory,
+  detectRuntime,
+  inspectSourceSession,
+} from "./runtime.mjs";
+import { resolveSource } from "./sources/index.mjs";
 import { JsonlFollower, resolveTranscript, transcriptLabel } from "./transcripts.mjs";
 
-const sourcePaneId = process.env.MERMAID_SOURCE_PANE_ID;
-const previewPaneId = process.env.HERDR_PANE_ID;
-const pluginRoot = process.env.HERDR_PLUGIN_ROOT || join(import.meta.dirname, "..");
-const stateDirectory = process.env.HERDR_PLUGIN_STATE_DIR;
+function parseArgs(argv) {
+  const options = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--runtime" && argv[i + 1]) {
+      options.runtime = argv[++i];
+    } else if (arg === "--source" && argv[i + 1]) {
+      options.source = argv[++i];
+    } else if ((arg === "--target" || arg === "--terminal" || arg === "--pane") && argv[i + 1]) {
+      options.target = argv[++i];
+    } else if (arg === "--state-dir" && argv[i + 1]) {
+      options.stateDir = argv[++i];
+    }
+  }
+  return options;
+}
 
-if (!sourcePaneId || !previewPaneId || !stateDirectory) {
-  console.error("Mermaid Preview is missing its Herdr pane context");
+const cli = parseArgs(process.argv.slice(2));
+const runtime = detectRuntime({ explicit: cli.runtime || null });
+const sourceName = cli.source || process.env.HERDR_PREVIEW_SOURCE || "mermaid";
+const sourceTargetId =
+  cli.target ||
+  process.env.HERDR_PREVIEW_SOURCE_PANE_ID ||
+  process.env.HERDR_PREVIEW_SOURCE_TERMINAL;
+const previewPaneId = process.env.HERDR_PANE_ID || null;
+const previewTerminalId = process.env.HC_TERMINAL_ID || null;
+const pluginRoot = process.env.HERDR_PLUGIN_ROOT || join(import.meta.dirname, "..");
+const stateDirectory = cli.stateDir || defaultStateDirectory(runtime);
+
+if (!sourceTargetId || (runtime === "tui" && !previewPaneId)) {
+  console.error("Preview is missing its Herdr pane or terminal target");
   process.exit(2);
 }
 
-const cacheDirectory = await mkdtemp(join(tmpdir(), "herdr-mermaid-preview-"));
-const stateKey = createHash("sha256").update(sourcePaneId).digest("hex").slice(0, 16);
+let source;
+try {
+  source = resolveSource(sourceName);
+} catch (error) {
+  console.error(String(error.message || error));
+  process.exit(2);
+}
+
+const cacheDirectory = await mkdtemp(join(tmpdir(), `herdr-${sourceName}-preview-`));
+const stateKey = createHash("sha256")
+  .update(`${runtime}:${sourceTargetId}:${sourceName}:terminal`)
+  .digest("hex")
+  .slice(0, 16);
 const statePath = join(stateDirectory, `preview-${stateKey}.json`);
 
 let closed = false;
 let currentIndex = -1;
 let currentSessionKey = null;
-let diagrams = [];
+let items = [];
 let follower = null;
 let generation = 0;
 let lastError = null;
 let rendered = new Map();
 let rendering = false;
-let seenDiagramHashes = new Set();
+let seenHashes = new Set();
 let seenRecordIds = new Set();
 let sessionLabel = "locating session";
 let views = new Map();
 
 const DEFAULT_VIEW = Object.freeze({ panX: 0.5, panY: 0.5, zoom: 1 });
+const MAX_ITEMS = 100;
+const MAX_RENDERED = 8;
 const MAX_ZOOM = 16;
 const PAN_STEP = 0.1;
 const ZOOM_FACTOR = 1.25;
@@ -50,7 +90,16 @@ const ZOOM_FACTOR = 1.25;
 await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
 await writeFile(
   statePath,
-  JSON.stringify({ pid: process.pid, previewPaneId, sourcePaneId }),
+  JSON.stringify({
+    mode: "terminal",
+    pid: process.pid,
+    previewPaneId,
+    previewTerminalId,
+    runtime,
+    sourceName,
+    sourcePaneId: sourceTargetId,
+    sourceTargetId,
+  }),
   { encoding: "utf8", mode: 0o600 },
 );
 
@@ -68,18 +117,39 @@ function truncate(text, width) {
 }
 
 function currentView() {
-  const diagram = diagrams[currentIndex];
-  return diagram ? views.get(diagram.hash) || DEFAULT_VIEW : DEFAULT_VIEW;
+  const item = items[currentIndex];
+  return item ? views.get(item.hash) || DEFAULT_VIEW : DEFAULT_VIEW;
+}
+
+/**
+ * Keep the retained set bounded. A Mermaid session accumulates a handful of
+ * small diagrams, but a session full of pasted screenshots is megabytes each —
+ * without a ceiling the pane grows for as long as the agent does.
+ */
+function forget(count) {
+  const dropped = items.splice(0, count);
+  for (const item of dropped) {
+    views.delete(item.hash);
+    rendered.delete(item.hash);
+  }
+  currentIndex = Math.max(0, currentIndex - dropped.length);
+}
+
+function cacheRendered(hash, bytes) {
+  rendered.set(hash, bytes);
+  for (const key of [...rendered.keys()].slice(0, rendered.size - MAX_RENDERED)) {
+    rendered.delete(key);
+  }
 }
 
 function writeScreen({ error = null, image = null, message = null } = {}) {
   if (closed) return;
   const size = terminalSize();
-  const diagram = diagrams[currentIndex];
+  const item = items[currentIndex];
   const view = currentView();
-  const indexLabel = diagram ? `${currentIndex + 1}/${diagrams.length}` : "0/0";
+  const indexLabel = item ? `${currentIndex + 1}/${items.length}` : "0/0";
   const header = truncate(
-    ` Mermaid ${indexLabel} · ${diagram?.type || sessionLabel} · zoom ${view.zoom.toFixed(1)}x · source ${sourcePaneId}`,
+    ` ${source.label} ${indexLabel} · ${item?.type || sessionLabel} · zoom ${view.zoom.toFixed(1)}x · source ${sourceTargetId}`,
     size.columns,
   );
   const footer = truncate(
@@ -94,11 +164,12 @@ function writeScreen({ error = null, image = null, message = null } = {}) {
       dimensions,
       { columns: size.columns, rows: Math.max(1, size.rows - 3) },
       view,
+      cellAspectRatio(),
     );
-    const imageId = Number.parseInt(diagram.hash.slice(0, 7), 16) || 1;
+    const imageId = Number.parseInt(item.hash.slice(0, 7), 16) || 1;
     output += encodeKittyPng(image, { ...placement, imageId });
   } else {
-    const body = error ? `Render failed:\n${error}` : message || "Waiting for Mermaid output…";
+    const body = error ? `Render failed:\n${error}` : message || `Waiting for ${source.waitingFor}…`;
     output += truncate(body, size.columns * Math.max(1, size.rows - 3));
   }
 
@@ -107,21 +178,21 @@ function writeScreen({ error = null, image = null, message = null } = {}) {
 }
 
 function showCurrent() {
-  const diagram = diagrams[currentIndex];
-  if (!diagram) {
-    writeScreen({ message: lastError || `Watching ${sessionLabel} for a complete Mermaid fence…` });
+  const item = items[currentIndex];
+  if (!item) {
+    writeScreen({ message: lastError || `Watching ${sessionLabel} for ${source.waitingFor}…` });
     return;
   }
-  const cached = rendered.get(diagram.hash);
+  const cached = rendered.get(item.hash);
   if (cached) writeScreen({ image: cached });
   else if (lastError) writeScreen({ error: lastError });
-  else writeScreen({ message: rendering ? "Rendering Mermaid…" : "Preparing Mermaid…" });
+  else writeScreen({ message: rendering ? `Rendering ${source.label}…` : `Preparing ${source.label}…` });
 }
 
 async function renderCurrent({ force = false } = {}) {
-  const diagram = diagrams[currentIndex];
-  if (!diagram) return;
-  if (!force && rendered.has(diagram.hash)) {
+  const item = items[currentIndex];
+  if (!item) return;
+  if (!force && rendered.has(item.hash)) {
     showCurrent();
     return;
   }
@@ -132,13 +203,8 @@ async function renderCurrent({ force = false } = {}) {
   showCurrent();
 
   try {
-    const result = await renderMermaid({
-      cacheDirectory,
-      hash: diagram.hash,
-      pluginRoot,
-      source: diagram.source,
-    });
-    rendered.set(diagram.hash, result.bytes);
+    const result = await source.render(item, { cacheDirectory, pluginRoot });
+    cacheRendered(item.hash, result.bytes);
     if (requestedGeneration === generation) {
       rendering = false;
       showCurrent();
@@ -157,23 +223,35 @@ function addRecord(record) {
   seenRecordIds.add(record.id);
 
   let added = false;
-  for (const diagram of extractMermaidBlocks(record.text)) {
-    if (seenDiagramHashes.has(diagram.hash)) continue;
-    seenDiagramHashes.add(diagram.hash);
-    diagrams.push(diagram);
-    currentIndex = diagrams.length - 1;
+  for (const item of source.extract(record)) {
+    if (seenHashes.has(item.hash)) continue;
+    seenHashes.add(item.hash);
+    items.push(item);
     added = true;
   }
-  if (added) void renderCurrent();
+  if (!added) return;
+  if (items.length > MAX_ITEMS) forget(items.length - MAX_ITEMS);
+  currentIndex = items.length - 1;
+  void renderCurrent();
 }
 
-async function adoptSession(info) {
-  const { agent, sessionId, sessionPath } = sessionIdentity(info);
-  if (!agent || !sessionId) {
-    throw new Error("Herdr has not received this pane's native agent session identity yet");
+async function adoptSession({ agent, sessionId, sessionPath }) {
+  if (!agent) {
+    throw new Error(
+      runtime === "tui"
+        ? "Herdr has not received this pane's native agent session identity yet"
+        : `No Claude Code or Codex agent detected in terminal ${sourceTargetId}`,
+    );
   }
   if (agent !== "codex" && agent !== "claude") {
-    throw new Error(`Mermaid Preview supports Codex and Claude Code, not ${agent}`);
+    throw new Error(`Preview supports Codex and Claude Code, not ${agent}`);
+  }
+  if (!sessionId) {
+    throw new Error(
+      runtime === "tui"
+        ? "Herdr has not received this pane's native agent session identity yet"
+        : `Waiting for a ${agent} session transcript in terminal ${sourceTargetId}`,
+    );
   }
 
   const key = `${agent}:${sessionId}`;
@@ -188,10 +266,10 @@ async function adoptSession(info) {
   follower?.close();
   currentSessionKey = key;
   sessionLabel = `${agent} · ${transcriptLabel(transcript)}`;
-  diagrams = [];
+  items = [];
   currentIndex = -1;
   rendered = new Map();
-  seenDiagramHashes = new Set();
+  seenHashes = new Set();
   seenRecordIds = new Set();
   views = new Map();
   lastError = null;
@@ -208,7 +286,8 @@ async function adoptSession(info) {
 
 async function refreshSession() {
   try {
-    await adoptSession(await paneInfo(sourcePaneId));
+    const identity = await inspectSourceSession({ runtime, targetId: sourceTargetId });
+    await adoptSession(identity);
   } catch (error) {
     lastError = String(error.message || error);
     showCurrent();
@@ -216,16 +295,16 @@ async function refreshSession() {
 }
 
 function selectRelative(delta) {
-  if (diagrams.length === 0) return;
-  currentIndex = (currentIndex + delta + diagrams.length) % diagrams.length;
+  if (items.length === 0) return;
+  currentIndex = (currentIndex + delta + items.length) % items.length;
   lastError = null;
   void renderCurrent();
 }
 
 function updateView(transform) {
-  const diagram = diagrams[currentIndex];
-  if (!diagram) return;
-  views.set(diagram.hash, transform(currentView()));
+  const item = items[currentIndex];
+  if (!item) return;
+  views.set(item.hash, transform(currentView()));
   showCurrent();
 }
 
@@ -259,13 +338,13 @@ async function cleanup(exitCode = 0) {
     const state = JSON.parse(await readFile(statePath, "utf8"));
     if (state.pid === process.pid) await unlink(statePath);
   } catch {
-    // The action treats missing or stale state files as closed previews.
+    // The launcher treats missing or stale state files as closed previews.
   }
   await rm(cacheDirectory, { recursive: true, force: true });
   process.exit(exitCode);
 }
 
-process.stdout.write("\u001b]0;Mermaid preview\u0007\u001b[?25l");
+process.stdout.write(`\u001b]0;${source.label} preview\u0007\u001b[?25l`);
 showCurrent();
 await refreshSession();
 const sessionTimer = setInterval(() => void refreshSession(), 2_000);

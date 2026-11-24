@@ -1,8 +1,8 @@
 {
   "name": "herdr-plugin-mermaid-preview",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Live Mermaid previews for Claude Code and Codex panes in Herdr",
+  "description": "Live Mermaid diagram and transcript image previews for Claude Code and Codex in Herdr TUI, Herdr App, and Herdr Browser",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -13,12 +13,18 @@
   },
   "homepage": "https://github.com/Volpestyle/herdr-plugin-mermaid-preview#readme",
   "type": "module",
+  "bin": {
+    "herdr-preview": "bin/herdr-preview.mjs"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
     "check": "npm run syntax && npm test",
-    "syntax": "node --check src/*.mjs test/*.test.mjs",
+    "install:all": "node scripts/install-mod.mjs all",
+    "install:app": "node scripts/install-mod.mjs app",
+    "install:browser": "node scripts/install-mod.mjs browser",
+    "syntax": "node --check bin/*.mjs scripts/*.mjs src/*.mjs src/*/*.mjs test/*.test.mjs",
     "test": "node --test"
   },
   "dependencies": {
